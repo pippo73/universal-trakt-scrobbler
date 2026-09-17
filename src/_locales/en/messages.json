@@ -478,8 +478,8 @@
 	"scrobApiKeyDescription": {
 		"message": "Your Scrob API key, found in Settings under your profile."
 	},
-	"scrobNotConfiguredMessage": {
-		"message": "Set the Scrob URL and API key in the options."
+	"useScrob": {
+		"message": "Use Scrob"
 	},
 	"scrobConfiguredMessage": {
 		"message": "Trakt login is optional — Scrob is already configured."

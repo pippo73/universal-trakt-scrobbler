@@ -1,16 +1,17 @@
 import { I18N } from '@common/I18N';
 import { Session } from '@common/Session';
 import { Shared } from '@common/Shared';
-import { Tabs } from '@common/Tabs';
 import { Center } from '@components/Center';
 import { useHistory } from '@contexts/HistoryContext';
-import { Button, CircularProgress, Typography } from '@mui/material';
+import { Button, CircularProgress, TextField, Typography } from '@mui/material';
 import { useEffect, useState } from 'react';
-import browser from 'webextension-polyfill';
 
 export const LoginPage = (): JSX.Element => {
 	const history = useHistory();
 	const [isLoading, setLoading] = useState(true);
+	const [isScrobFormOpen, setScrobFormOpen] = useState(false);
+	const [scrobUrl, setScrobUrl] = useState(Shared.storage.options.scrobUrl || '');
+	const [scrobApiKey, setScrobApiKey] = useState(Shared.storage.options.scrobApiKey || '');
 
 	const onLoginClick = async (): Promise<void> => {
 		setLoading(true);
@@ -21,8 +22,12 @@ export const LoginPage = (): JSX.Element => {
 		history.push('/home');
 	};
 
-	const onOptionsClick = async (): Promise<void> => {
-		await Tabs.open(browser.runtime.getURL('options.html'));
+	const onScrobSaveClick = async (): Promise<void> => {
+		await Shared.storage.saveOptions({
+			scrobUrl: scrobUrl.trim(),
+			scrobApiKey: scrobApiKey.trim(),
+		});
+		history.push('/home');
 	};
 
 	useEffect(() => {
@@ -61,10 +66,7 @@ export const LoginPage = (): JSX.Element => {
 		void init();
 	}, []);
 
-	const { scrobUrl, scrobApiKey } = Shared.storage.options;
-	const hasScrob = !!(scrobUrl && scrobApiKey);
-	// Builds without a Trakt client id cannot log in to Trakt: the button would only open an error page.
-	const hasTrakt = !!Shared.clientId;
+	const hasScrob = !!(Shared.storage.options.scrobUrl && Shared.storage.options.scrobApiKey);
 
 	return (
 		<Center>
@@ -72,32 +74,53 @@ export const LoginPage = (): JSX.Element => {
 				<CircularProgress color="secondary" />
 			) : (
 				<>
-					{hasTrakt && (
-						<Button color="secondary" onClick={() => void onLoginClick()} variant="contained">
-							{I18N.translate('login')}
-						</Button>
+					<Button color="secondary" onClick={() => void onLoginClick()} variant="contained">
+						{I18N.translate('login')}
+					</Button>
+					<Button
+						color="primary"
+						onClick={() => setScrobFormOpen(!isScrobFormOpen)}
+						variant="contained"
+						sx={{ mt: 1 }}
+					>
+						{I18N.translate('useScrob')}
+					</Button>
+					{isScrobFormOpen && (
+						<>
+							<TextField
+								label={I18N.translate('scrobUrl')}
+								placeholder="https://trak.example.com"
+								value={scrobUrl}
+								onChange={(event) => setScrobUrl(event.target.value)}
+								size="small"
+								sx={{ mt: 1 }}
+							/>
+							<TextField
+								label={I18N.translate('scrobApiKey')}
+								type="password"
+								value={scrobApiKey}
+								onChange={(event) => setScrobApiKey(event.target.value)}
+								size="small"
+								sx={{ mt: 1 }}
+							/>
+							<Button
+								color="primary"
+								disabled={!scrobUrl.trim() || !scrobApiKey.trim()}
+								onClick={() => void onScrobSaveClick()}
+								variant="text"
+								sx={{ mt: 1 }}
+							>
+								{I18N.translate('save')}
+							</Button>
+						</>
 					)}
-					{hasScrob ? (
+					{hasScrob && !isScrobFormOpen && (
 						<>
 							<Typography color="text.secondary" sx={{ mt: 1 }}>
 								{I18N.translate('scrobConfiguredMessage')}
 							</Typography>
 							<Button color="primary" onClick={onSkipClick} variant="text" sx={{ mt: 1 }}>
 								{I18N.translate('skipToHome')}
-							</Button>
-						</>
-					) : (
-						<>
-							<Typography color="text.secondary" sx={{ mt: 1 }}>
-								{I18N.translate('scrobNotConfiguredMessage')}
-							</Typography>
-							<Button
-								color="secondary"
-								onClick={() => void onOptionsClick()}
-								variant={hasTrakt ? 'text' : 'contained'}
-								sx={{ mt: 1 }}
-							>
-								{I18N.translate('options')}
 							</Button>
 						</>
 					)}
