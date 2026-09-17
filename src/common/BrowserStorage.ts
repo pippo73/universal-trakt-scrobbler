@@ -109,6 +109,8 @@ export interface ScrobblingDetails {
 	item: ScrobbleItemValues;
 	tabId: number | null;
 	isPaused: boolean;
+	scrobSessionKey?: string;
+	scrobRuntime?: number;
 }
 
 export type StorageValuesOptionsV4 = StorageValuesOptionsV3 & {

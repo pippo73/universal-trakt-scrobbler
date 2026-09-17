@@ -1,7 +1,10 @@
 import { ScrobApi } from '@apis/ScrobApi';
 import { TmdbApi } from '@apis/TmdbApi';
+import { ScrobblingDetails } from '@common/BrowserStorage';
+import { RequestError } from '@common/RequestError';
+import { Requests } from '@common/Requests';
 import { Shared } from '@common/Shared';
-import { ScrobbleItem } from '@models/Item';
+import { createScrobbleItem, ScrobbleItem } from '@models/Item';
 import { TraktEpisodeItem, TraktMovieItem } from '@models/TraktItem';
 
 interface ScrobTmdbInfo {
@@ -10,85 +13,215 @@ interface ScrobTmdbInfo {
 	seriesTmdbId?: number;
 	seasonNumber?: number;
 	episodeNumber?: number;
+	title: string;
+	runtime?: number; // minutes
 }
 
-interface ScrobWatchData {
-	tmdb_id: number;
-	media_type: 'movie' | 'episode';
-	series_tmdb_id?: number;
-	season_number?: number;
-	episode_number?: number;
-	watched_at?: string;
-	completed: boolean;
+interface ScrobSessionStartResponse {
+	session_key: string;
+	media_id: number;
+	runtime: number | null;
 }
+
+// Same threshold as ScrobbleController: below it a stopped item is only paused, not watched.
+const WATCHED_THRESHOLD = 80.0;
 
 const tmdbCache = new Map<string, ScrobTmdbInfo | null>();
 
 class _ScrobScrobble extends ScrobApi {
-	isConfigured(): boolean {
-		const { scrobUrl, scrobApiKey } = Shared.storage.options;
-		return !!(scrobUrl && scrobApiKey);
-	}
+	START = 1;
+	PAUSE = 2;
+	STOP = 3;
 
 	async start(item: ScrobbleItem): Promise<void> {
 		if (!this.isConfigured()) {
 			return;
 		}
-		// Pre-resolve TMDB info so it's ready when stop() is called.
-		if (!this.getTmdbFromTrakt(item)) {
-			const key = this.getCacheKey(item);
-			if (!tmdbCache.has(key)) {
-				this.resolveAndCacheTmdb(item).catch(() => {
-					// Resolution will be retried on stop() if needed.
-				});
+		const info = await this.getTmdbInfo(item);
+		if (!info) {
+			return;
+		}
+		const session = await this.sendScrobble<ScrobSessionStartResponse>(
+			item,
+			this.START,
+			'/history/session/start',
+			'POST',
+			{
+				tmdb_id: info.tmdbId,
+				media_type: info.mediaType,
+				title: info.title,
+				runtime: info.runtime,
+				show_tmdb_id: info.seriesTmdbId,
+				season_number: info.seasonNumber,
+				episode_number: info.episodeNumber,
 			}
+		);
+		if (!session) {
+			return;
+		}
+
+		// Without Trakt, nobody else keeps scrobblingDetails, which the popup and the
+		// tab-close handler rely on. With Trakt, TraktScrobble.start() has just written it.
+		let { scrobblingDetails } = await Shared.storage.get('scrobblingDetails');
+		if (scrobblingDetails?.tabId === Shared.tabId) {
+			scrobblingDetails.isPaused = false;
+		} else {
+			scrobblingDetails = { item: item.save(), tabId: Shared.tabId, isPaused: false };
+		}
+		scrobblingDetails.scrobSessionKey = session.session_key;
+		scrobblingDetails.scrobRuntime = session.runtime ?? info.runtime;
+		await Shared.storage.set({ scrobblingDetails }, false);
+		if (!item.trakt) {
+			await Shared.events.dispatch('SCROBBLE_START', null, scrobblingDetails);
 		}
 	}
 
-	async pause(_item: ScrobbleItem): Promise<void> {
-		// Scrob doesn't have real-time pause tracking via API.
+	async progress(item: ScrobbleItem): Promise<void> {
+		const details = await this.getSessionDetails();
+		if (!details) {
+			return;
+		}
+		await this.update(item, details, 'playing');
 	}
 
+	async pause(item: ScrobbleItem): Promise<void> {
+		const details = await this.getSessionDetails();
+		if (!details) {
+			return;
+		}
+		await this.update(item, details, 'paused', this.PAUSE);
+		if (!item.trakt) {
+			details.isPaused = true;
+			await Shared.storage.set({ scrobblingDetails: details }, false);
+			await Shared.events.dispatch('SCROBBLE_PAUSE', null, details);
+		}
+	}
+
+	/**
+	 * Called both from the content script (with the item) and from the background when the
+	 * tab closes (without it). Leaves removing scrobblingDetails to TraktScrobble.stop(),
+	 * which always runs right after and does it even when not logged in to Trakt.
+	 */
 	async stop(item?: ScrobbleItem): Promise<void> {
-		if (!this.isConfigured()) {
+		const details = await this.getSessionDetails();
+		if (!details) {
 			return;
-		}
-
-		const { scrobblingDetails } = await Shared.storage.get('scrobblingDetails');
-		if (!scrobblingDetails && !item) {
-			return;
-		}
-		if (!item && scrobblingDetails) {
-			const { createScrobbleItem } = await import('@models/Item');
-			item = createScrobbleItem(scrobblingDetails.item);
 		}
 		if (!item) {
-			return;
+			item = createScrobbleItem(details.item);
 		}
-
-		const tmdbInfo = await this.getTmdbInfo(item);
-		if (!tmdbInfo) {
-			return;
+		const key = encodeURIComponent(details.scrobSessionKey);
+		if (item.progress >= WATCHED_THRESHOLD) {
+			await this.sendScrobble(item, this.STOP, `/history/session/${key}/complete`, 'POST');
+		} else {
+			// Pausing keeps the partial progress in Scrob's "continue watching";
+			// deleting the session would throw it away.
+			await this.update(item, details, 'paused', this.STOP);
 		}
-
-		const completed = (item.trakt?.progress ?? item.progress ?? 0) >= 80;
-		const data: ScrobWatchData = {
-			tmdb_id: tmdbInfo.tmdbId,
-			media_type: tmdbInfo.mediaType,
-			...(tmdbInfo.seriesTmdbId ? { series_tmdb_id: tmdbInfo.seriesTmdbId } : {}),
-			...(tmdbInfo.seasonNumber ? { season_number: tmdbInfo.seasonNumber } : {}),
-			...(tmdbInfo.episodeNumber ? { episode_number: tmdbInfo.episodeNumber } : {}),
-			watched_at: item.watchedAt ? new Date(item.watchedAt).toISOString() : undefined,
-			completed,
-		};
-
-		await this.send(data);
+		if (!item.trakt) {
+			await Shared.events.dispatch('SCROBBLE_STOP', null, details);
+		}
 	}
 
-	private getTmdbFromTrakt(item: ScrobbleItem): ScrobTmdbInfo | null {
-		if (!item.trakt) {
+	async syncHistory(item: ScrobbleItem): Promise<boolean> {
+		if (!this.isConfigured()) {
+			return false;
+		}
+		const info = await this.getTmdbInfo(item);
+		if (!info) {
+			Shared.errors.log(`Scrob: no TMDB match for "${item.getFullTitle()}"`, new Error());
+			return false;
+		}
+		try {
+			await this.send('/history', 'POST', {
+				tmdb_id: info.tmdbId,
+				media_type: info.mediaType,
+				series_tmdb_id: info.seriesTmdbId,
+				season_number: info.seasonNumber,
+				episode_number: info.episodeNumber,
+				// Service dates are unix seconds; an unknown date is sent as null, not "now".
+				watched_at: item.watchedAt ? new Date(item.watchedAt * 1000).toISOString() : null,
+				completed: true,
+			});
+		} catch (err) {
+			// 409 = Scrob already has this watch inside its dedup window.
+			if (err instanceof RequestError && err.status === 409) {
+				return true;
+			}
+			throw err;
+		}
+		return true;
+	}
+
+	private async getSessionDetails(): Promise<
+		(ScrobblingDetails & { scrobSessionKey: string }) | null
+	> {
+		if (!this.isConfigured()) {
 			return null;
 		}
+		const { scrobblingDetails } = await Shared.storage.get('scrobblingDetails');
+		if (!scrobblingDetails?.scrobSessionKey) {
+			return null;
+		}
+		return scrobblingDetails as ScrobblingDetails & { scrobSessionKey: string };
+	}
+
+	private async update(
+		item: ScrobbleItem,
+		details: ScrobblingDetails & { scrobSessionKey: string },
+		state: 'playing' | 'paused',
+		scrobbleType?: number
+	): Promise<void> {
+		const runtimeSeconds = (details.scrobRuntime ?? 0) * 60;
+		await this.sendScrobble(
+			item,
+			scrobbleType,
+			`/history/session/${encodeURIComponent(details.scrobSessionKey)}`,
+			'PATCH',
+			{
+				progress_seconds: Math.round((runtimeSeconds * item.progress) / 100),
+				state,
+			}
+		);
+	}
+
+	private async sendScrobble<T>(
+		item: ScrobbleItem,
+		scrobbleType: number | undefined,
+		path: string,
+		method: string,
+		body?: unknown
+	): Promise<T | null> {
+		try {
+			const response = await this.send<T>(path, method, body);
+			if (scrobbleType && !item.trakt) {
+				await Shared.events.dispatch('SCROBBLE_SUCCESS', null, {
+					item: this.getNotificationItem(item),
+					scrobbleType,
+				});
+			}
+			return response;
+		} catch (err) {
+			if (Shared.errors.validate(err)) {
+				Shared.errors.log(`Scrob: ${method} ${path} failed`, err);
+				if (scrobbleType && !item.trakt) {
+					await Shared.events.dispatch('SCROBBLE_ERROR', null, {
+						item: this.getNotificationItem(item),
+						scrobbleType,
+						error: err as Error,
+					});
+				}
+			}
+			return null;
+		}
+	}
+
+	// Notifications only read the title from the item.
+	private getNotificationItem(item: ScrobbleItem) {
+		return { title: item.getFullTitle() } as never;
+	}
+
+	private async getTmdbInfo(item: ScrobbleItem): Promise<ScrobTmdbInfo | null> {
 		if (item.trakt instanceof TraktEpisodeItem) {
 			return {
 				tmdbId: item.trakt.tmdbId,
@@ -96,163 +229,91 @@ class _ScrobScrobble extends ScrobApi {
 				seriesTmdbId: item.trakt.show.tmdbId,
 				seasonNumber: item.trakt.season,
 				episodeNumber: item.trakt.number,
+				title: item.getFullTitle(),
 			};
 		}
 		if (item.trakt instanceof TraktMovieItem) {
-			return {
-				tmdbId: item.trakt.tmdbId,
-				mediaType: 'movie',
-			};
+			return { tmdbId: item.trakt.tmdbId, mediaType: 'movie', title: item.getFullTitle() };
 		}
-		return null;
-	}
 
-	private async getTmdbInfo(item: ScrobbleItem): Promise<ScrobTmdbInfo | null> {
-		const fromTrakt = this.getTmdbFromTrakt(item);
-		if (fromTrakt) {
-			return fromTrakt;
+		const key =
+			item.type === 'episode'
+				? `${item.serviceId}_ep_${item.show.title}_s${item.season}_e${item.number}`
+				: `${item.serviceId}_mv_${item.title}_${item.year}`;
+		if (tmdbCache.has(key)) {
+			return tmdbCache.get(key) ?? null;
 		}
-		return this.resolveAndCacheTmdb(item);
-	}
-
-	private getCacheKey(item: ScrobbleItem): string {
-		if (item.type === 'episode') {
-			return `${item.serviceId}_ep_${item.show.title}_s${item.season}_e${item.number}`;
-		}
-		return `${item.serviceId}_mv_${item.title}_${item.year}`;
-	}
-
-	private async resolveAndCacheTmdb(item: ScrobbleItem): Promise<ScrobTmdbInfo | null> {
-		const key = this.getCacheKey(item);
-		const cached = tmdbCache.get(key);
-		if (cached !== undefined) {
-			return cached;
+		if (!Shared.tmdbApiKey) {
+			Shared.errors.log('Scrob: TMDB_API_KEY missing from the build', new Error());
+			return null;
 		}
 
 		let result: ScrobTmdbInfo | null = null;
-
 		try {
-			if (item.type === 'movie') {
-				const tmdbId = await this.searchMovie(item.title, item.year);
-				if (tmdbId) {
-					result = { tmdbId, mediaType: 'movie' };
-				}
-			} else if (item.type === 'episode') {
-				const showTmdb = await TmdbApi.searchTvShow(
-					item.show.title,
-					item.show.year,
-					item.serviceId
-				);
-				if (showTmdb) {
-					const tmdbEpId = await this.searchEpisode(showTmdb.id, item.season, item.number);
-					if (tmdbEpId) {
-						result = {
-							tmdbId: tmdbEpId,
-							mediaType: 'episode',
-							seriesTmdbId: showTmdb.id,
-							seasonNumber: item.season,
-							episodeNumber: item.number,
-						};
-					}
-				}
-			}
-		} catch (_err) {
-			// Resolution failed, will try again later
+			result = item.type === 'movie' ? await this.findMovie(item) : await this.findEpisode(item);
+		} catch (err) {
+			// Not cached: a network error should be retried on the next call.
+			Shared.errors.log(`Scrob: TMDB lookup failed for "${item.getFullTitle()}"`, err as Error);
+			return null;
 		}
-
 		tmdbCache.set(key, result);
 		return result;
 	}
 
-	private async searchMovie(title: string, year: number): Promise<number | null> {
-		if (!Shared.tmdbApiKey) {
-			console.warn('[UTS] TMDb API key is not set, skipping movie search');
+	private async findMovie(item: ScrobbleItem): Promise<ScrobTmdbInfo | null> {
+		if (item.type !== 'movie') {
 			return null;
 		}
-		try {
-			const url = `https://api.themoviedb.org/3/search/movie?api_key=${Shared.tmdbApiKey}&query=${encodeURIComponent(title)}`;
-			const responseText = await this.requests.send({ url, method: 'GET' });
-			const response = JSON.parse(responseText) as {
-				results?: { id: number; title: string; release_date?: string }[];
-			};
-
-			if (!response.results?.length) {
-				return null;
-			}
-
-			if (year) {
-				const match = response.results.find((r) => {
-					if (!r.release_date) return false;
-					return parseInt(r.release_date.split('-')[0], 10) === year;
-				});
-				if (match) return match.id;
-			}
-
-			return response.results[0].id;
-		} catch (_err) {
+		const search = await this.tmdbGet<{ results?: { id: number; release_date?: string }[] }>(
+			`/search/movie?query=${encodeURIComponent(item.title)}`
+		);
+		const results = search.results ?? [];
+		const match =
+			(item.year && results.find((r) => r.release_date?.startsWith(`${item.year}`))) || results[0];
+		if (!match) {
 			return null;
 		}
-	}
-
-	private async searchEpisode(
-		showTmdbId: number,
-		season: number,
-		episode: number
-	): Promise<number | null> {
-		try {
-			const url = `https://api.themoviedb.org/3/tv/${showTmdbId}/season/${season}/episode/${episode}?api_key=${Shared.tmdbApiKey}`;
-			const responseText = await this.requests.send({ url, method: 'GET' });
-			const response = JSON.parse(responseText) as { id?: number };
-			return response.id || null;
-		} catch (_err) {
-			return null;
-		}
-	}
-
-	async send(data: ScrobWatchData): Promise<void> {
-		await this.activate();
-		const responseText = await this.requests.send({
-			url: this.getUrl('/history/watched'),
-			method: 'POST',
-			body: data,
-		});
-		try {
-			const response = JSON.parse(responseText);
-			console.log('[UTS] Scrob sync OK:', response);
-		} catch (_e) {
-			console.log('[UTS] Scrob sync OK (raw):', responseText);
-		}
-		await Shared.events.dispatch('SCROBBLE_SUCCESS', null, {
-			item: { type: data.media_type } as never,
-			scrobbleType: 3,
-		});
-	}
-
-	async syncHistory(item: ScrobbleItem): Promise<void> {
-		if (!this.isConfigured()) {
-			console.log('[UTS] Scrob syncHistory skipped: not configured');
-			return;
-		}
-
-		const tmdbInfo = await this.getTmdbInfo(item);
-		if (!tmdbInfo) {
-			console.warn(`[UTS] Scrob syncHistory skipped for "${item.getFullTitle()}": no TMDB info`);
-			return;
-		}
-
-		console.log(`[UTS] Scrob syncing: ${item.getFullTitle()} → TMDB ${tmdbInfo.tmdbId}`);
-
-		const data: ScrobWatchData = {
-			tmdb_id: tmdbInfo.tmdbId,
-			media_type: tmdbInfo.mediaType,
-			...(tmdbInfo.seriesTmdbId ? { series_tmdb_id: tmdbInfo.seriesTmdbId } : {}),
-			...(tmdbInfo.seasonNumber ? { season_number: tmdbInfo.seasonNumber } : {}),
-			...(tmdbInfo.episodeNumber ? { episode_number: tmdbInfo.episodeNumber } : {}),
-			watched_at: item.watchedAt ? new Date(item.watchedAt).toISOString() : undefined,
-			completed: true,
+		const details = await this.tmdbGet<{ runtime?: number }>(`/movie/${match.id}`);
+		return {
+			tmdbId: match.id,
+			mediaType: 'movie',
+			title: item.title,
+			runtime: details.runtime || undefined,
 		};
+	}
 
-		await this.send(data);
+	private async findEpisode(item: ScrobbleItem): Promise<ScrobTmdbInfo | null> {
+		if (item.type !== 'episode') {
+			return null;
+		}
+		const show = await TmdbApi.searchTvShow(item.show.title, item.show.year, item.serviceId);
+		if (!show) {
+			return null;
+		}
+		const episode = await this.tmdbGet<{ id?: number; runtime?: number }>(
+			`/tv/${show.id}/season/${item.season}/episode/${item.number}`
+		);
+		if (!episode.id) {
+			return null;
+		}
+		return {
+			tmdbId: episode.id,
+			mediaType: 'episode',
+			seriesTmdbId: show.id,
+			seasonNumber: item.season,
+			episodeNumber: item.number,
+			title: item.getFullTitle(),
+			runtime: episode.runtime || undefined,
+		};
+	}
+
+	private async tmdbGet<T>(path: string): Promise<T> {
+		const separator = path.includes('?') ? '&' : '?';
+		const responseText = await Requests.send({
+			url: `${TmdbApi.API_URL}${path}${separator}api_key=${Shared.tmdbApiKey}`,
+			method: 'GET',
+		});
+		return JSON.parse(responseText) as T;
 	}
 }
 

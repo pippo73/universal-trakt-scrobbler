@@ -4,6 +4,7 @@ import { TraktSync } from '@apis/TraktSync';
 import { BrowserAction } from '@common/BrowserAction';
 import { StorageValuesOptions } from '@common/BrowserStorage';
 import { I18N } from '@common/I18N';
+import { Session } from '@common/Session';
 import { RequestError } from '@common/RequestError';
 import { Shared } from '@common/Shared';
 import { Utils } from '@common/Utils';
@@ -101,7 +102,22 @@ class _AutoSync {
 				items = store.data.items.filter(
 					(item) => item.progress >= Shared.storage.syncOptions.minPercentageWatched
 				);
-				if (items.length > 0) {
+				if (items.length > 0 && ScrobScrobble.isConfigured()) {
+					// Scrob goes first: the Trakt block below throws when items are not found on Trakt.
+					let hasScrobFailed = false;
+					for (const item of items) {
+						try {
+							hasScrobFailed = !(await ScrobScrobble.syncHistory(item)) || hasScrobFailed;
+						} catch (err) {
+							hasScrobFailed = true;
+							Shared.errors.log(`Scrob: failed to sync "${item.getFullTitle()}"`, err as Error);
+						}
+					}
+					if (hasScrobFailed) {
+						throw new Error('Some items could not be synced to Scrob');
+					}
+				}
+				if (items.length > 0 && Session.isLoggedIn) {
 					items = await ServiceApi.loadTraktHistory(items, undefined, 'autoSync');
 
 					const foundItems = items.filter((item) => item.trakt);
@@ -113,15 +129,6 @@ class _AutoSync {
 							itemToSync.isSelected = true;
 						}
 						await TraktSync.sync(store, itemsToSync, 'autoSync');
-					}
-
-					// Also sync to Scrob if configured
-					if (ScrobScrobble.isConfigured()) {
-						for (const item of items) {
-							if (item.progress >= Shared.storage.syncOptions.minPercentageWatched) {
-								await ScrobScrobble.syncHistory(item);
-							}
-						}
 					}
 
 					items = store.data.items.filter(

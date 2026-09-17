@@ -456,7 +456,7 @@
 		"message": "URL Scrob"
 	},
 	"scrobUrlDescription": {
-		"message": "L'URL della tua istanza Scrob (es. https://scrob.example.com)."
+		"message": "L'indirizzo della tua istanza Scrob, per esempio https://trak.example.com."
 	},
 	"scrobApiKey": {
 		"message": "API Key Scrob"

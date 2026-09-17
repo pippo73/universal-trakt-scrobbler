@@ -236,7 +236,7 @@ const getManifest = (browserName: string, isDev: boolean): string => {
 		key?: string;
 		optional_host_permissions?: string[];
 	} = {
-		name: isDev ? '[dev] Universal Trakt Scrobbler' : 'Universal Trakt Scrobbler',
+		name: isDev ? '[dev] Universal Scrob Scrobbler' : 'Universal Scrob Scrobbler',
 		version: packageJson.version,
 		description: '__MSG_appDescription__',
 		icons: {

@@ -146,6 +146,7 @@ export class ScrobbleController {
 			item.trakt.progress = progress;
 		}
 		if (!this.reachedScrobbleThreshold && progress > this.scrobbleThreshold) {
+			// Update the stored progress after reaching the scrobble threshold to make sure that the item is scrobbled on tab close.
 			this.reachedScrobbleThreshold = true;
 			const { scrobblingDetails } = await Shared.storage.get('scrobblingDetails');
 			if (scrobblingDetails) {
@@ -153,11 +154,13 @@ export class ScrobbleController {
 				await Shared.storage.set({ scrobblingDetails }, false);
 				await Shared.events.dispatch('SCROBBLE_PROGRESS', null, scrobblingDetails);
 			}
+			await ScrobScrobble.progress(item);
 		} else if (
 			progress < this.progress ||
 			(this.progress === 0.0 && progress > 1.0) ||
 			progress - this.progress > 10.0
 		) {
+			// Update the scrobbling item once the progress reaches 1% and then every time it increases by 10%
 			this.progress = progress;
 			const { scrobblingDetails } = await Shared.storage.get('scrobblingDetails');
 			if (scrobblingDetails) {
@@ -165,6 +168,7 @@ export class ScrobbleController {
 				await Shared.storage.set({ scrobblingDetails }, false);
 				await Shared.events.dispatch('SCROBBLE_PROGRESS', null, scrobblingDetails);
 			}
+			await ScrobScrobble.progress(item);
 		}
 	}
 
