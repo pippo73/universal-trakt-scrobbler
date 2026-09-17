@@ -69,7 +69,8 @@ export const LoginPage = (): JSX.Element => {
 	const hasScrob = !!(Shared.storage.options.scrobUrl && Shared.storage.options.scrobApiKey);
 
 	return (
-		<Center>
+		// Stacked: the Scrob form does not fit on the row the default Center lays out.
+		<Center isHorizontal={false} sx={{ height: 1, px: 2 }}>
 			{isLoading ? (
 				<CircularProgress color="secondary" />
 			) : (
@@ -93,7 +94,8 @@ export const LoginPage = (): JSX.Element => {
 								value={scrobUrl}
 								onChange={(event) => setScrobUrl(event.target.value)}
 								size="small"
-								sx={{ mt: 1 }}
+								fullWidth
+								sx={{ mt: 1, maxWidth: 360 }}
 							/>
 							<TextField
 								label={I18N.translate('scrobApiKey')}
@@ -101,7 +103,8 @@ export const LoginPage = (): JSX.Element => {
 								value={scrobApiKey}
 								onChange={(event) => setScrobApiKey(event.target.value)}
 								size="small"
-								sx={{ mt: 1 }}
+								fullWidth
+								sx={{ mt: 1, maxWidth: 360 }}
 							/>
 							<Button
 								color="primary"
