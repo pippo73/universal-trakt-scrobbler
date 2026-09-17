@@ -270,6 +270,8 @@ const getManifest = (browserName: string, isDev: boolean): string => {
 				'*://*.trakt.tv/*',
 				'*://*.themoviedb.org/*',
 				'*://*.uts.rafaelgomes.xyz/*',
+				// Scrob instance the fork scrobbles to
+				'*://trak.example.com/*',
 			];
 			manifest.action = {
 				default_icon: {
@@ -309,6 +311,8 @@ const getManifest = (browserName: string, isDev: boolean): string => {
 				'*://*.trakt.tv/*',
 				'*://*.themoviedb.org/*',
 				'*://*.uts.rafaelgomes.xyz/*',
+				// Scrob instance the fork scrobbles to
+				'*://trak.example.com/*',
 			];
 			manifest.browser_action = {
 				default_icon: {
