@@ -464,6 +464,9 @@
 	"scrobApiKeyDescription": {
 		"message": "La tua chiave API Scrob, disponibile nelle Impostazioni del profilo."
 	},
+	"scrobNotConfiguredMessage": {
+		"message": "Imposta l'indirizzo e la chiave API di Scrob nelle opzioni."
+	},
 	"scrobConfiguredMessage": {
 		"message": "Il login Trakt è opzionale — Scrob è già configurato."
 	},
