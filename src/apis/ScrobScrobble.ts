@@ -1,8 +1,6 @@
 import { ScrobApi } from '@apis/ScrobApi';
-import { TmdbApi } from '@apis/TmdbApi';
 import { ScrobblingDetails } from '@common/BrowserStorage';
 import { RequestError } from '@common/RequestError';
-import { Requests } from '@common/Requests';
 import { Shared } from '@common/Shared';
 import { createScrobbleItem, ScrobbleItem } from '@models/Item';
 import { TraktEpisodeItem, TraktMovieItem } from '@models/TraktItem';
@@ -243,11 +241,6 @@ class _ScrobScrobble extends ScrobApi {
 		if (tmdbCache.has(key)) {
 			return tmdbCache.get(key) ?? null;
 		}
-		if (!Shared.tmdbApiKey) {
-			Shared.errors.log('Scrob: TMDB_API_KEY missing from the build', new Error());
-			return null;
-		}
-
 		let result: ScrobTmdbInfo | null = null;
 		try {
 			result = item.type === 'movie' ? await this.findMovie(item) : await this.findEpisode(item);
@@ -260,46 +253,34 @@ class _ScrobScrobble extends ScrobApi {
 		return result;
 	}
 
+	// Title lookups go through Scrob, which holds the TMDB key: the extension needs none.
 	private async findMovie(item: ScrobbleItem): Promise<ScrobTmdbInfo | null> {
 		if (item.type !== 'movie') {
 			return null;
 		}
-		const search = await this.tmdbGet<{ results?: { id: number; release_date?: string }[] }>(
-			`/search/movie?query=${encodeURIComponent(item.title)}`
-		);
-		const results = search.results ?? [];
-		const match =
-			(item.year && results.find((r) => r.release_date?.startsWith(`${item.year}`))) || results[0];
-		if (!match) {
-			return null;
-		}
-		const details = await this.tmdbGet<{ runtime?: number }>(`/movie/${match.id}`);
-		return {
-			tmdbId: match.id,
-			mediaType: 'movie',
-			title: item.title,
-			runtime: details.runtime || undefined,
-		};
+		const match = await this.search(item.title, 'movie', item.year);
+		return match ? { tmdbId: match.tmdb_id, mediaType: 'movie', title: item.title } : null;
 	}
 
 	private async findEpisode(item: ScrobbleItem): Promise<ScrobTmdbInfo | null> {
-		if (item.type !== 'episode') {
+		if (item.type !== 'episode' || !item.season || !item.number) {
 			return null;
 		}
-		const show = await TmdbApi.searchTvShow(item.show.title, item.show.year, item.serviceId);
+		const show = await this.search(item.show.title, 'series', item.show.year);
 		if (!show) {
 			return null;
 		}
-		const episode = await this.tmdbGet<{ id?: number; runtime?: number }>(
-			`/tv/${show.id}/season/${item.season}/episode/${item.number}`
+		const episode = await this.send<{ tmdb_id?: number; runtime?: number }>(
+			`/shows/${show.tmdb_id}/season/${item.season}/${item.number}`,
+			'GET'
 		);
-		if (!episode.id) {
+		if (!episode?.tmdb_id) {
 			return null;
 		}
 		return {
-			tmdbId: episode.id,
+			tmdbId: episode.tmdb_id,
 			mediaType: 'episode',
-			seriesTmdbId: show.id,
+			seriesTmdbId: show.tmdb_id,
 			seasonNumber: item.season,
 			episodeNumber: item.number,
 			title: item.getFullTitle(),
@@ -307,13 +288,21 @@ class _ScrobScrobble extends ScrobApi {
 		};
 	}
 
-	private async tmdbGet<T>(path: string): Promise<T> {
-		const separator = path.includes('?') ? '&' : '?';
-		const responseText = await Requests.send({
-			url: `${TmdbApi.API_URL}${path}${separator}api_key=${Shared.tmdbApiKey}`,
-			method: 'GET',
-		});
-		return JSON.parse(responseText) as T;
+	private async search(
+		title: string,
+		type: 'movie' | 'series',
+		year?: number
+	): Promise<{ tmdb_id: number } | null> {
+		const response = await this.send<{
+			results?: { tmdb_id: number | null; type: string; release_date?: string | null }[];
+		}>(`/media/search?q=${encodeURIComponent(title)}&type=${type}`, 'GET');
+		const results = (response?.results ?? []).filter(
+			(r): r is { tmdb_id: number; type: string; release_date?: string | null } =>
+				r.type === type && !!r.tmdb_id
+		);
+		return (
+			(year && results.find((r) => r.release_date?.startsWith(`${year}`))) || results[0] || null
+		);
 	}
 }
 
