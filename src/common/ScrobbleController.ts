@@ -1,9 +1,11 @@
 import { ServiceApi } from '@apis/ServiceApi';
+import { ScrobScrobble } from '@apis/ScrobScrobble';
 import { TraktScrobble } from '@apis/TraktScrobble';
 import { TraktSearch } from '@apis/TraktSearch';
 import { Cache } from '@common/Cache';
 import { ItemCorrectedData, StorageOptionsChangeData } from '@common/Events';
 import { getScrobbleParser, ScrobbleParser } from '@common/ScrobbleParser';
+import { Session } from '@common/Session';
 import { Shared } from '@common/Shared';
 import { createTraktScrobbleItem } from '@models/TraktItem';
 
@@ -64,7 +66,16 @@ export class ScrobbleController {
 		}
 		this.reachedScrobbleThreshold = false;
 		this.progress = 0.0;
-		if (typeof item.trakt === 'undefined') {
+
+		const hasTrakt = Session.isLoggedIn;
+		const hasScrob = ScrobScrobble.isConfigured();
+
+		if (!hasTrakt && !hasScrob) {
+			return;
+		}
+
+		// Resolve Trakt ID (requires login)
+		if (hasTrakt && typeof item.trakt === 'undefined') {
 			const caches = await Cache.get(['itemsToTraktItems', 'traktItems', 'urlsToTraktItems']);
 			const { corrections } = await Shared.storage.get(['corrections']);
 			const databaseId = item.getDatabaseId();
@@ -72,32 +83,54 @@ export class ScrobbleController {
 			try {
 				item.trakt = await TraktSearch.find(item, caches, correction);
 			} catch (err) {
-				item.trakt = null;
-				throw err;
+				if (hasScrob) {
+					// Trakt failed but Scrob is available — don't throw, continue with Scrob only
+					item.trakt = null;
+				} else {
+					item.trakt = null;
+					throw err;
+				}
 			}
 			await Cache.set(caches);
 		}
-		if (!item.trakt) {
-			return;
+
+		// Send to Trakt
+		if (item.trakt) {
+			item.trakt.progress = item.progress;
+			await TraktScrobble.start(item);
 		}
-		item.trakt.progress = item.progress;
-		await TraktScrobble.start(item);
+
+		// Send to Scrob (independent of Trakt)
+		if (hasScrob) {
+			await ScrobScrobble.start(item);
+		}
 	}
 
 	async pauseScrobble(): Promise<void> {
 		const item = this.parser.getItem();
-		if (!item?.trakt) {
+		if (!item) {
 			return;
 		}
-		await TraktScrobble.pause(item);
+		if (item.trakt) {
+			await TraktScrobble.pause(item);
+		}
+		if (ScrobScrobble.isConfigured()) {
+			await ScrobScrobble.pause(item);
+		}
 	}
 
 	async stopScrobble(): Promise<void> {
 		const item = this.parser.getItem();
-		if (!item?.trakt) {
+		if (!item) {
 			return;
 		}
-		await TraktScrobble.stop(item);
+		// Send to Scrob first (doesn't touch storage), then Trakt (removes scrobblingDetails)
+		if (ScrobScrobble.isConfigured()) {
+			await ScrobScrobble.stop(item);
+		}
+		if (item.trakt) {
+			await TraktScrobble.stop(item);
+		}
 		this.parser.clearItem();
 		this.reachedScrobbleThreshold = false;
 		this.progress = 0.0;
@@ -109,12 +142,10 @@ export class ScrobbleController {
 			return;
 		}
 		item.progress = progress;
-		if (!item?.trakt) {
-			return;
+		if (item.trakt) {
+			item.trakt.progress = progress;
 		}
-		item.trakt.progress = progress;
-		if (!this.reachedScrobbleThreshold && item.trakt.progress > this.scrobbleThreshold) {
-			// Update the stored progress after reaching the scrobble threshold to make sure that the item is scrobbled on tab close.
+		if (!this.reachedScrobbleThreshold && progress > this.scrobbleThreshold) {
 			this.reachedScrobbleThreshold = true;
 			const { scrobblingDetails } = await Shared.storage.get('scrobblingDetails');
 			if (scrobblingDetails) {
@@ -123,12 +154,11 @@ export class ScrobbleController {
 				await Shared.events.dispatch('SCROBBLE_PROGRESS', null, scrobblingDetails);
 			}
 		} else if (
-			item.progress < this.progress ||
-			(this.progress === 0.0 && item.progress > 1.0) ||
-			item.progress - this.progress > 10.0
+			progress < this.progress ||
+			(this.progress === 0.0 && progress > 1.0) ||
+			progress - this.progress > 10.0
 		) {
-			// Update the scrobbling item once the progress reaches 1% and then every time it increases by 10%
-			this.progress = item.progress;
+			this.progress = progress;
 			const { scrobblingDetails } = await Shared.storage.get('scrobblingDetails');
 			if (scrobblingDetails) {
 				scrobblingDetails.item = item.save();

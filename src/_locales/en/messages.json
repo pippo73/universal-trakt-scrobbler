@@ -465,5 +465,23 @@
 	},
 	"yes": {
 		"message": "Yes"
+	},
+	"scrobUrl": {
+		"message": "Scrob URL"
+	},
+	"scrobUrlDescription": {
+		"message": "The URL of your Scrob instance (e.g. https://scrob.example.com)."
+	},
+	"scrobApiKey": {
+		"message": "Scrob API Key"
+	},
+	"scrobApiKeyDescription": {
+		"message": "Your Scrob API key, found in Settings under your profile."
+	},
+	"scrobConfiguredMessage": {
+		"message": "Trakt login is optional — Scrob is already configured."
+	},
+	"skipToHome": {
+		"message": "Continue without Trakt"
 	}
 }

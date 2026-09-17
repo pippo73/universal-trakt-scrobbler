@@ -155,14 +155,30 @@ abstract class BaseItem implements BaseItemValues {
 	}
 
 	isSelectable() {
-		return !this.isLoading && !!this.trakt && !this.trakt.watchedAt && !this.doHide();
+		if (this.isLoading || this.doHide()) {
+			return false;
+		}
+		// Selectable if Trakt item is resolved and not already watched
+		if (!!this.trakt && !this.trakt.watchedAt) {
+			return true;
+		}
+		// Also selectable for Scrob sync if Scrob is configured
+		const { scrobUrl, scrobApiKey } = Shared.storage.options;
+		return !!(scrobUrl && scrobApiKey);
 	}
 
 	isMissingWatchedDate() {
 		const { addWithReleaseDate, addWithReleaseDateMissing } = Shared.storage.syncOptions;
+		const { scrobUrl, scrobApiKey } = Shared.storage.options;
+		const hasScrob = !!(scrobUrl && scrobApiKey);
+
 		if (addWithReleaseDate) {
 			if (addWithReleaseDateMissing) {
 				return !this.watchedAt && !this.trakt?.releaseDate;
+			}
+			// If using Scrob without Trakt, fall back to item.watchedAt
+			if (!this.trakt?.releaseDate && hasScrob) {
+				return !this.watchedAt;
 			}
 			return !this.trakt?.releaseDate;
 		}

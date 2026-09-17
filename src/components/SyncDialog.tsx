@@ -1,6 +1,8 @@
+import { ScrobScrobble } from '@apis/ScrobScrobble';
 import { TraktSync } from '@apis/TraktSync';
 import { SyncDialogShowData } from '@common/Events';
 import { I18N } from '@common/I18N';
+import { Session } from '@common/Session';
 import { Shared } from '@common/Shared';
 import { Utils } from '@common/Utils';
 import { Center } from '@components/Center';
@@ -45,8 +47,25 @@ export const SyncDialog = (): JSX.Element => {
 				return;
 			}
 
+			if (Session.isLoggedIn) {
+				try {
+					await TraktSync.sync(store, items);
+				} catch (_err) {
+					// Do nothing
+				}
+			}
+
+			if (ScrobScrobble.isConfigured()) {
+				for (const item of items) {
+					try {
+						await ScrobScrobble.syncHistory(item);
+					} catch (_err) {
+						// Failed for this item, continue
+					}
+				}
+			}
+
 			try {
-				await TraktSync.sync(store, items);
 				if (serviceId) {
 					const lastSync = items[0].watchedAt ?? Utils.unix();
 					if (lastSync > Shared.storage.options.services[serviceId].lastSync) {

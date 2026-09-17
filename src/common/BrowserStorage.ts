@@ -113,6 +113,8 @@ export interface ScrobblingDetails {
 
 export type StorageValuesOptionsV4 = StorageValuesOptionsV3 & {
 	loadImages: boolean;
+	scrobUrl: string;
+	scrobApiKey: string;
 };
 
 export type StorageValuesOptionsV3 = Omit<StorageValuesOptionsV2, 'streamingServices'> & {
@@ -865,6 +867,18 @@ class _BrowserStorage {
 				value: false,
 				permissions: ['cookies', 'webRequest', 'webRequestBlocking'],
 				doShow: Shared.browser === 'firefox',
+			},
+			scrobUrl: {
+				type: 'text',
+				id: 'scrobUrl',
+				value: '',
+				doShow: true,
+			},
+			scrobApiKey: {
+				type: 'text',
+				id: 'scrobApiKey',
+				value: '',
+				doShow: true,
 			},
 		};
 		const values = await this.get('options');

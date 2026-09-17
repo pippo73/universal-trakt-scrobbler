@@ -12,6 +12,12 @@ export const LoginWrapper = ({ children }: LoginWrapperProps): JSX.Element => {
 		return <>{children}</>;
 	}
 
+	// If Scrob is configured, allow access without Trakt login
+	const { scrobUrl, scrobApiKey } = Shared.storage.options;
+	if (scrobUrl && scrobApiKey) {
+		return <>{children}</>;
+	}
+
 	Shared.redirectPath = history.location.pathname;
 	return <Navigate to="/login" replace />;
 };

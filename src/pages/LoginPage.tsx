@@ -3,7 +3,7 @@ import { Session } from '@common/Session';
 import { Shared } from '@common/Shared';
 import { Center } from '@components/Center';
 import { useHistory } from '@contexts/HistoryContext';
-import { Button, CircularProgress } from '@mui/material';
+import { Button, CircularProgress, Typography } from '@mui/material';
 import { useEffect, useState } from 'react';
 
 export const LoginPage = (): JSX.Element => {
@@ -13,6 +13,10 @@ export const LoginPage = (): JSX.Element => {
 	const onLoginClick = async (): Promise<void> => {
 		setLoading(true);
 		await Session.login();
+	};
+
+	const onSkipClick = () => {
+		history.push('/home');
 	};
 
 	useEffect(() => {
@@ -51,14 +55,29 @@ export const LoginPage = (): JSX.Element => {
 		void init();
 	}, []);
 
+	const { scrobUrl, scrobApiKey } = Shared.storage.options;
+	const hasScrob = !!(scrobUrl && scrobApiKey);
+
 	return (
 		<Center>
 			{isLoading ? (
 				<CircularProgress color="secondary" />
 			) : (
-				<Button color="secondary" onClick={() => void onLoginClick()} variant="contained">
-					{I18N.translate('login')}
-				</Button>
+				<>
+					<Button color="secondary" onClick={() => void onLoginClick()} variant="contained">
+						{I18N.translate('login')}
+					</Button>
+					{hasScrob && (
+						<>
+							<Typography color="text.secondary" sx={{ mt: 1 }}>
+								{I18N.translate('scrobConfiguredMessage')}
+							</Typography>
+							<Button color="primary" onClick={onSkipClick} variant="text" sx={{ mt: 1 }}>
+								{I18N.translate('skipToHome')}
+							</Button>
+						</>
+					)}
+				</>
 			)}
 		</Center>
 	);

@@ -1,3 +1,4 @@
+import { ScrobScrobble } from '@apis/ScrobScrobble';
 import { TraktScrobble } from '@apis/TraktScrobble';
 import { ContentScriptConnectData, StorageOptionsChangeData } from '@common/Events';
 import { Messaging } from '@common/Messaging';
@@ -50,6 +51,8 @@ class _ScriptInjector {
 		}
 		const { scrobblingDetails } = await Shared.storage.get('scrobblingDetails');
 		if (scrobblingDetails && data.tabId === scrobblingDetails.tabId) {
+			// Send to Scrob first, then Trakt (which removes scrobblingDetails from storage)
+			await ScrobScrobble.stop();
 			await TraktScrobble.stop();
 		}
 	};

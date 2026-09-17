@@ -1,4 +1,5 @@
 import { getServiceApi, ServiceApi } from '@apis/ServiceApi';
+import { ScrobScrobble } from '@apis/ScrobScrobble';
 import { TraktSync } from '@apis/TraktSync';
 import { BrowserAction } from '@common/BrowserAction';
 import { StorageValuesOptions } from '@common/BrowserStorage';
@@ -112,6 +113,15 @@ class _AutoSync {
 							itemToSync.isSelected = true;
 						}
 						await TraktSync.sync(store, itemsToSync, 'autoSync');
+					}
+
+					// Also sync to Scrob if configured
+					if (ScrobScrobble.isConfigured()) {
+						for (const item of items) {
+							if (item.progress >= Shared.storage.syncOptions.minPercentageWatched) {
+								await ScrobScrobble.syncHistory(item);
+							}
+						}
 					}
 
 					items = store.data.items.filter(
